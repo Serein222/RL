@@ -1,10 +1,7 @@
-import gymnasium as gym
 import numpy as np
 from network import PolicyNet, CriticNet
 import torch.nn.functional as F
-from torch.utils.tensorboard import SummaryWriter
 import torch
-from tqdm import tqdm
 
 class PPO:
     def __init__(self, state_dim, hidden_dim, action_dim, actor_lr, critic_lr, gamma, lmbda, epsilon, epoch, entropy_coef=0.01, device=None):

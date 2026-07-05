@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
+from cnn import SimpleCNN
 class CriticNet(nn.Module):
     def __init__(self, state_dim, hidden_dim):
         super(CriticNet, self).__init__()
