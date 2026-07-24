@@ -3,9 +3,9 @@ from network import PolicyNet, CriticNet
 from cnn import FrameFeatureExtractor
 import torch.nn.functional as F
 import torch
-
+from collections import deque
 class PPO:
-    def __init__(self, state_dim, hidden_dim, action_dim, actor_lr, critic_lr, gamma, lmbda, epsilon, epoch, image_size, entropy_coef=0.001, device=None):
+    def __init__(self, state_dim, hidden_dim, action_dim, actor_lr, critic_lr, gamma, lmbda, epsilon, epoch, image_size, stuck_frame=None, entropy_coef=0.001, device=None):
         self.actor_net = PolicyNet(state_dim, hidden_dim, action_dim)
         self.critic_net = CriticNet(state_dim, hidden_dim)
         self.actor_optimizer = torch.optim.Adam(self.actor_net.parameters(), lr=actor_lr)
@@ -17,10 +17,14 @@ class PPO:
         self.epsilon = epsilon
         self.epoch = epoch
         self.device = device
-        self.extractor = FrameFeatureExtractor(image_size, state_dim)
+        self.extractor = FrameFeatureExtractor(image_size, state_dim, stuck_frame)  # 传入堆叠的帧数
+        self.stuck_frame = stuck_frame
     def take_action(self, state):
         if isinstance(state, np.ndarray):
-            state = torch.from_numpy(state)
+            state = torch.from_numpy(state) # -> (C, H, W)
+        if isinstance(state, deque) and self.stuck_frame is not None:
+            frames = np.array(state, dtype=np.float32)  # state is (H, W)
+            state = torch.from_numpy(frames) # -> (frame, H, W)
         action_probs = self.actor_net(self.extractor(state)[0])
         action_dist = torch.distributions.Categorical(probs=action_probs)
         action = action_dist.sample()

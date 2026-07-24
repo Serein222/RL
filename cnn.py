@@ -4,9 +4,9 @@ import numpy as np
 import os
 import cv2
 class FrameFeatureExtractor(nn.Module):
-    def __init__(self, image_size: int, output_dim: int):
+    def __init__(self, image_size: int, output_dim: int, input_channels: int):
         super(FrameFeatureExtractor, self).__init__()
-        self.cnn = SimpleCNN(image_size, output_dim)
+        self.cnn = SimpleCNN(image_size, output_dim, input_channels)
     def forward(self, x):
         if isinstance(x, list):
             x = np.array(x, dtype=np.float32)
@@ -18,6 +18,7 @@ class FrameFeatureExtractor(nn.Module):
 class SimpleCNN(nn.Module):
     def __init__(self, image_size: int, output_dim: int, input_channels: int = 1):
         # 默认处理灰度图，input_channels = 1，对于breakout，图象84*84
+        # 对于多帧堆叠，input_channels = 4，相当于替代了之前的灰度/RGB通道
         super(SimpleCNN, self).__init__()
         self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=8, stride=4)
         self.conv1_size = (image_size - 8) // 4 + 1
@@ -32,7 +33,7 @@ class SimpleCNN(nn.Module):
     
     def forward(self, x):
         assert(isinstance(x, torch.Tensor))
-        if x.ndim == 2:
+        if x.ndim == 2 or x.ndim == 3:
             x = x.unsqueeze(0)          # -> (step, channel, 84, 84)
         x1 = self.relu(self.conv1(x))   # -> (step, 32, self.conv1_size, self.conv1_size)
         x2 = self.relu(self.conv2(x1))  # -> (step, 64, self.conv2_size, self.conv2_size)

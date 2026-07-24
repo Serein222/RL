@@ -5,6 +5,7 @@ import cv2
 import os
 import sys
 from tqdm import tqdm
+from collections import deque
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ppo_breakout import PPO
 '''
@@ -37,8 +38,9 @@ if __name__ == "__main__":
     critic_lr = 5e-4
     gamma = 0.99
     lmbda = 0.95
+    stuck_frame = 4 # n帧图像堆叠
     # state_dim取决于extractor返回的(batch, dim)的dim
-    agent = PPO(256, 128, action_space, actor_lr=0.001, critic_lr=0.005, gamma=0.99, lmbda=0.9, epsilon=0.2, epoch=10, image_size=84)
+    agent = PPO(256, 128, action_space, actor_lr=0.001, critic_lr=0.005, gamma=0.99, lmbda=0.9, epsilon=0.2, epoch=10, image_size=84, stuck_frame=4)
 
     with tqdm(total=1000, desc="Training Episodes") as pbar:
         for episode in range(1000):
@@ -46,11 +48,15 @@ if __name__ == "__main__":
             done = False
             trajectory = {'state': [], 'action': [], 'reward': [], 'next_state': [], "done": []}
             action = -1
+            frame_buffer = deque(maxlen=stuck_frame)
             while not done:
                 # visualize preprocess
                 image = preprocess_obs(state, True)
                 # print(type(image), image.shape)
-                
+                if not frame_buffer:
+                    # 用第一帧填充
+                    for _ in range(stuck_frame):
+                        frame_buffer.append(image[0])
                 # visualize extractor
                 # extractor = agent.extractor
                 # out, x3, x2, x1 = extractor(image)
@@ -62,7 +68,7 @@ if __name__ == "__main__":
                 if action == -1:
                     action = 1
                 else:
-                    action, prob = agent.take_action(image)
+                    action, prob = agent.take_action(frame_buffer)
                     # print("output action is:", action, "its prob is:", np.exp(prob))
 
                 # ppo step test
@@ -71,10 +77,12 @@ if __name__ == "__main__":
                 done = terminated or truncated
                 
                 # ppo update test
-                trajectory['state'].append(image)
+                trajectory['state'].append(frame_buffer)
                 trajectory['action'].append(action)
                 trajectory['reward'].append(reward)
                 trajectory['done'].append(done)
+                
+                frame_buffer.append(next_image[0])
                 trajectory['next_state'].append(next_image)
             loss, perf = agent.update(trajectory)
             pbar.set_postfix({
