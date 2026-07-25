@@ -8,6 +8,8 @@ from tqdm import tqdm
 from collections import deque
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ppo_breakout import PPO
+from torch.utils.tensorboard import SummaryWriter
+
 '''
 函数功能测试/模块测试
 '''
@@ -21,10 +23,21 @@ def preprocess_obs(obs, print_obs=False):
     obs = obs / 255.0
     obs = np.expand_dims(obs,axis=0)  # (C, H, W)
     return obs.astype(np.float32)
+'''
+添加可视化
+'''
+def write_to_tensorboard(writer, episode, losses_data, perf_data):
+    writer.add_scalar(tag='Perf/reward', scalar_value=perf_data['reward'], global_step=episode)
+    writer.add_scalar(tag='Perf/success_rate', scalar_value=perf_data['success_rate'], global_step=episode)
+    writer.add_scalar(tag='Perf/steps', scalar_value=perf_data['steps'], global_step=episode)
+    writer.add_scalar(tag='Losses/actor_loss', scalar_value=losses_data['actor_loss'], global_step=episode)
+    writer.add_scalar(tag='Losses/critic loss', scalar_value=losses_data['critic_loss'], global_step=episode)
+    writer.add_scalar(tag='Losses/entropy', scalar_value=losses_data['entropy'], global_step=episode)
 
 if __name__ == "__main__":
-    env = gym.make("ALE/Breakout-v5", frameskip=6)   # , render_mode="human"
-    
+    env = gym.make("ALE/Breakout-v5", frameskip=4)   # , render_mode="human"
+    writer = SummaryWriter(log_dir='log/stuck_frame')
+    summary_window = 20
     action_space = env.action_space.n
     observation_space = env.observation_space.shape
     print("Action space:", action_space)    # 动作空间Discrete：（Noop, Fire, Left, Right）分别是（0, 1, 2, 3）
@@ -40,7 +53,7 @@ if __name__ == "__main__":
     lmbda = 0.95
     stuck_frame = 4 # n帧图像堆叠
     # state_dim取决于extractor返回的(batch, dim)的dim
-    agent = PPO(256, 128, action_space, actor_lr=0.001, critic_lr=0.005, gamma=0.99, lmbda=0.9, epsilon=0.2, epoch=10, image_size=84, stuck_frame=4)
+    agent = PPO(256, 128, action_space, actor_lr, critic_lr, gamma, lmbda, epsilon=0.2, epoch=10, image_size=84, stuck_frame=4)
 
     with tqdm(total=1000, desc="Training Episodes") as pbar:
         for episode in range(1000):
@@ -65,10 +78,10 @@ if __name__ == "__main__":
                 # extractor.cnn.visualize_one_image(x3, "x3")
 
                 # ppo take_action test
-                if action == -1:
-                    action = 1
-                else:
-                    action, prob = agent.take_action(frame_buffer)
+                # if action == -1:
+                #     action = 1
+                # else:
+                action, prob = agent.take_action(frame_buffer)
                     # print("output action is:", action, "its prob is:", np.exp(prob))
 
                 # ppo step test
@@ -83,7 +96,7 @@ if __name__ == "__main__":
                 trajectory['done'].append(done)
                 
                 frame_buffer.append(next_image[0])
-                trajectory['next_state'].append(next_image)
+                trajectory['next_state'].append(frame_buffer)
             loss, perf = agent.update(trajectory)
             pbar.set_postfix({
                 'Reward': f"{perf['reward']:.2f}",
@@ -91,3 +104,5 @@ if __name__ == "__main__":
                 'Steps': perf['steps']
             })
             pbar.update(1)
+            if write_data == True and episode % summary_window == 0:
+                write_to_tensorboard(writer, episode, loss, perf)

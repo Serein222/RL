@@ -5,11 +5,20 @@ import torch.nn.functional as F
 import torch
 from collections import deque
 class PPO:
-    def __init__(self, state_dim, hidden_dim, action_dim, actor_lr, critic_lr, gamma, lmbda, epsilon, epoch, image_size, stuck_frame=None, entropy_coef=0.001, device=None):
+    def __init__(self, state_dim, hidden_dim, action_dim, actor_lr, critic_lr, gamma, lmbda, epsilon, epoch, image_size, stuck_frame=None, batch_size=64, entropy_coef=0.001, device=None):
+        self.extractor = FrameFeatureExtractor(image_size, state_dim, stuck_frame)  # 传入堆叠的帧数
         self.actor_net = PolicyNet(state_dim, hidden_dim, action_dim)
         self.critic_net = CriticNet(state_dim, hidden_dim)
-        self.actor_optimizer = torch.optim.Adam(self.actor_net.parameters(), lr=actor_lr)
-        self.critic_optimizer = torch.optim.Adam(self.critic_net.parameters(), lr=critic_lr)
+        # self.actor_optimizer = torch.optim.Adam(list(self.actor_net.parameters()) + list(self.extractor.parameters()), lr=actor_lr)
+        # self.critic_optimizer = torch.optim.Adam(list(self.critic_net.parameters()) + list(self.extractor.parameters()), lr=critic_lr)
+        self.optimizer = torch.optim.Adam(
+            list(self.extractor.parameters())
+            +
+            list(self.actor_net.parameters())
+            +
+            list(self.critic_net.parameters()),
+            critic_lr
+        )
         self.state_dim = state_dim
         self.gamma = gamma
         self.lmbda = lmbda
@@ -17,8 +26,8 @@ class PPO:
         self.epsilon = epsilon
         self.epoch = epoch
         self.device = device
-        self.extractor = FrameFeatureExtractor(image_size, state_dim, stuck_frame)  # 传入堆叠的帧数
         self.stuck_frame = stuck_frame
+        self.batch_size = batch_size
     def take_action(self, state):
         if isinstance(state, np.ndarray):
             state = torch.from_numpy(state) # -> (C, H, W)
@@ -62,6 +71,7 @@ class PPO:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         for _ in range(self.epoch):
+            states = self.extractor(trajectory['state'])
             action_probs = self.actor_net(states)
             action_dist = torch.distributions.Categorical(probs=action_probs)   # [steps, action_dim]
             entropy = action_dist.entropy().mean()  # [steps] -> [1]
@@ -75,13 +85,16 @@ class PPO:
             critic_loss = torch.mean(F.mse_loss(TD_targets.detach(), values_now))   # 最小化预测误差不要加负号
 
             # 在每个epoch结束时更新
-            self.actor_optimizer.zero_grad()
-            self.critic_optimizer.zero_grad()
-            actor_loss.backward(retain_graph=True)
-            critic_loss.backward(retain_graph=True)
-            self.actor_optimizer.step()
-            self.critic_optimizer.step()
-        
+            # self.actor_optimizer.zero_grad()
+            # self.critic_optimizer.zero_grad()
+            # actor_loss.backward(retain_graph=True)
+            # critic_loss.backward(retain_graph=True)
+            # self.actor_optimizer.step()
+            # self.critic_optimizer.step()
+            self.optimizer.zero_grad()
+            loss = actor_loss + critic_loss * 0.5
+            loss.backward()
+            self.optimizer.step()
         losses_data = {'actor_loss': actor_loss.item(), 'critic_loss': critic_loss.item(), 'entropy': entropy.item()}
         perf_data = {'reward': np.sum(trajectory['reward']), 'steps': len(trajectory['reward'])}
         return losses_data, perf_data

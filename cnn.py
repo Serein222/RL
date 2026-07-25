@@ -9,7 +9,7 @@ class FrameFeatureExtractor(nn.Module):
         self.cnn = SimpleCNN(image_size, output_dim, input_channels)
     def forward(self, x):
         if isinstance(x, list):
-            x = np.array(x, dtype=np.float32)
+            x = np.array([np.array(i) for i in x], dtype=np.float32)
         if isinstance(x, np.ndarray):
             x = torch.from_numpy(x)
         out = self.cnn(x)
@@ -33,6 +33,7 @@ class SimpleCNN(nn.Module):
     
     def forward(self, x):
         assert(isinstance(x, torch.Tensor))
+        # print(f"debug: x dim is {x.ndim}, shape is {x.shape}")
         if x.ndim == 2 or x.ndim == 3:
             x = x.unsqueeze(0)          # -> (step, channel, 84, 84)
         x1 = self.relu(self.conv1(x))   # -> (step, 32, self.conv1_size, self.conv1_size)
