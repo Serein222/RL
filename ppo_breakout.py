@@ -40,25 +40,30 @@ class PPO:
         return action.item(), action_dist.log_prob(action).item()
     
     def update(self, trajectory):
-        states = self.extractor(trajectory['state'])
+        raw_states = trajectory['state']
         # print(states)
         # print("debug: states type:", type(states))
         # print("debug: states shape:", states.shape)
-        next_states = self.extractor(trajectory['next_state'])
+        raw_next_states = trajectory['next_state']
         actions = torch.tensor(trajectory['action'], dtype=torch.int64)
         actions = actions.unsqueeze(1)  # (steps, 1)
         # if actions.ndim == 0:
         #     actions.unsqueeze(0)    # -> (1, bacth_size)
         # actions = actions.unsqueeze(-1) # (1, bacth_size, 1)
         rewards = torch.tensor(trajectory['reward'], dtype=torch.float32)
-        dones = torch.tensor(trajectory['done'], dtype=torch.int64)
+        dones = torch.tensor(trajectory['done'], dtype=torch.float32)
+
+        # =========================
+        # 1. 计算 old policy / advantage
+        # =========================
         with torch.no_grad():
-            # 计算old log probs / TD target / Advantages
-            action_probs = self.actor_net(states)
+            states_feature = self.extractor(raw_states)
+            next_states_feature = self.extractor(raw_next_states)
+            action_probs = self.actor_net(states_feature)
             # print("debug: ", action_probs.ndim, action_probs.shape, actions, actions.ndim, actions.shape)
             old_action_logits = torch.log(action_probs.gather(1, actions))    # [steps] -> [steps, 1]
-            values_next = self.critic_net(next_states).squeeze(-1)
-            values_now = self.critic_net(states).squeeze(-1)
+            values_next = self.critic_net(next_states_feature).squeeze(-1)
+            values_now = self.critic_net(states_feature).squeeze(-1)
             TD_targets = rewards + self.gamma * values_next * (1 - dones)
             TD_deltas = TD_targets - values_now.detach()    # [steps]
             advantages = TD_deltas.clone()  # [steps]
@@ -69,34 +74,52 @@ class PPO:
             
             advantages = advantages.detach()
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        
-        for _ in range(self.epoch):
-            states = self.extractor(trajectory['state'])
-            action_probs = self.actor_net(states)
-            action_dist = torch.distributions.Categorical(probs=action_probs)   # [steps, action_dim]
-            entropy = action_dist.entropy().mean()  # [steps] -> [1]
-            
-            action_logits = torch.log(action_probs.gather(1, actions)) # [steps, 1]
-            ratio = torch.exp(action_logits - old_action_logits).squeeze(-1)
-            surr1 = ratio * advantages
-            surr2 = torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon) * advantages
-            actor_loss = -torch.mean(torch.min(surr1, surr2)) - self.entropy_coef * entropy
-            values_now = self.critic_net(states).squeeze(-1)    # 预测当前的values, 目标是固定的TD_targets
-            critic_loss = torch.mean(F.mse_loss(TD_targets.detach(), values_now))   # 最小化预测误差不要加负号
+        total_steps = len(actions)
+        # =========================
+        # 2. PPO mini batch update
+        # =========================
 
-            # 在每个epoch结束时更新
-            # self.actor_optimizer.zero_grad()
-            # self.critic_optimizer.zero_grad()
-            # actor_loss.backward(retain_graph=True)
-            # critic_loss.backward(retain_graph=True)
-            # self.actor_optimizer.step()
-            # self.critic_optimizer.step()
-            self.optimizer.zero_grad()
-            loss = actor_loss + critic_loss * 0.5
-            loss.backward()
-            self.optimizer.step()
-        losses_data = {'actor_loss': actor_loss.item(), 'critic_loss': critic_loss.item(), 'entropy': entropy.item()}
-        perf_data = {'reward': np.sum(trajectory['reward']), 'steps': len(trajectory['reward'])}
+        for _ in range(self.epoch):
+            indices = np.arange(total_steps)
+            np.random.shuffle(indices)
+            for start in range(0, total_steps, self.batch_size):
+                end = start + self.batch_size
+                batch_idx = indices[start:end]
+                batch_idx = torch.tensor(batch_idx, dtype=torch.long)
+                batch_states = [raw_states[i] for i in batch_idx]
+                batch_actions = actions[batch_idx]
+                batch_advantages = advantages[batch_idx]
+                batch_old_log_probs = old_action_logits[batch_idx]
+                batch_targets = TD_targets[batch_idx]
+                # =====================
+                # 重新建立CNN计算图
+                # =====================
+                features = self.extractor(batch_states)
+                action_probs = self.actor_net(features)
+                action_dist = torch.distributions.Categorical(probs=action_probs)
+                entropy = action_dist.entropy().mean()
+                log_probs = torch.log(action_probs.gather(1, batch_actions))
+                ratio = torch.exp(log_probs - batch_old_log_probs).squeeze(-1)
+                surr1 = ratio * batch_advantages
+                surr2 = torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon) * batch_advantages
+                actor_loss = -torch.min(surr1, surr2).mean() - self.entropy_coef * entropy
+                values = self.critic_net(features).squeeze(-1)
+                critic_loss = F.mse_loss(values, batch_targets) # 默认已经求均值了
+                loss = (actor_loss + 0.5 * critic_loss)
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+
+        losses_data = {
+            "actor_loss": actor_loss.item(),
+            "critic_loss": critic_loss.item(),
+            "entropy": entropy.item()
+        }
+
+        perf_data = {
+            "reward": np.sum(trajectory['reward']),
+            "steps": len(trajectory['reward'])
+        }
         return losses_data, perf_data
 
 

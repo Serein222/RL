@@ -28,7 +28,7 @@ def preprocess_obs(obs, print_obs=False):
 '''
 def write_to_tensorboard(writer, episode, losses_data, perf_data):
     writer.add_scalar(tag='Perf/reward', scalar_value=perf_data['reward'], global_step=episode)
-    writer.add_scalar(tag='Perf/success_rate', scalar_value=perf_data['success_rate'], global_step=episode)
+    # writer.add_scalar(tag='Perf/success_rate', scalar_value=perf_data['success_rate'], global_step=episode)
     writer.add_scalar(tag='Perf/steps', scalar_value=perf_data['steps'], global_step=episode)
     writer.add_scalar(tag='Losses/actor_loss', scalar_value=losses_data['actor_loss'], global_step=episode)
     writer.add_scalar(tag='Losses/critic loss', scalar_value=losses_data['critic_loss'], global_step=episode)
