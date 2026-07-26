@@ -5,10 +5,19 @@ import torch.nn.functional as F
 import torch
 from collections import deque
 class PPO:
-    def __init__(self, state_dim, hidden_dim, action_dim, actor_lr, critic_lr, gamma, lmbda, epsilon, epoch, image_size, stuck_frame=None, batch_size=64, entropy_coef=0.001, device=None):
-        self.extractor = FrameFeatureExtractor(image_size, state_dim, stuck_frame)  # 传入堆叠的帧数
-        self.actor_net = PolicyNet(state_dim, hidden_dim, action_dim)
-        self.critic_net = CriticNet(state_dim, hidden_dim)
+    def __init__(self, state_dim, hidden_dim, action_dim, actor_lr, critic_lr, gamma, lmbda, epsilon, epoch, image_size, stuck_frame=None, batch_size=64, entropy_coef=0.001):
+        self.state_dim = state_dim
+        self.gamma = gamma
+        self.lmbda = lmbda
+        self.entropy_coef = entropy_coef
+        self.epsilon = epsilon
+        self.epoch = epoch
+        self.stuck_frame = stuck_frame
+        self.batch_size = batch_size
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.extractor = FrameFeatureExtractor(image_size, state_dim, stuck_frame).to(self.device)  # 传入堆叠的帧数
+        self.actor_net = PolicyNet(state_dim, hidden_dim, action_dim).to(self.device)
+        self.critic_net = CriticNet(state_dim, hidden_dim).to(self.device)
         # self.actor_optimizer = torch.optim.Adam(list(self.actor_net.parameters()) + list(self.extractor.parameters()), lr=actor_lr)
         # self.critic_optimizer = torch.optim.Adam(list(self.critic_net.parameters()) + list(self.extractor.parameters()), lr=critic_lr)
         self.optimizer = torch.optim.Adam(
@@ -19,21 +28,12 @@ class PPO:
             list(self.critic_net.parameters()),
             critic_lr
         )
-        self.state_dim = state_dim
-        self.gamma = gamma
-        self.lmbda = lmbda
-        self.entropy_coef = entropy_coef
-        self.epsilon = epsilon
-        self.epoch = epoch
-        self.device = device
-        self.stuck_frame = stuck_frame
-        self.batch_size = batch_size
     def take_action(self, state):
         if isinstance(state, np.ndarray):
-            state = torch.from_numpy(state) # -> (C, H, W)
+            state = torch.from_numpy(state).to(self.device) # -> (C, H, W)
         if isinstance(state, deque) and self.stuck_frame is not None:
             frames = np.array(state, dtype=np.float32)  # state is (H, W)
-            state = torch.from_numpy(frames) # -> (frame, H, W)
+            state = torch.from_numpy(frames).to(self.device) # -> (frame, H, W)
         action_probs = self.actor_net(self.extractor(state)[0])
         action_dist = torch.distributions.Categorical(probs=action_probs)
         action = action_dist.sample()
@@ -45,13 +45,13 @@ class PPO:
         # print("debug: states type:", type(states))
         # print("debug: states shape:", states.shape)
         next_states = self.extractor(trajectory['next_state'])
-        actions = torch.tensor(trajectory['action'], dtype=torch.int64)
+        actions = torch.tensor(trajectory['action'], dtype=torch.int64, device=self.device)
         actions = actions.unsqueeze(1)  # (steps, 1)
         # if actions.ndim == 0:
         #     actions.unsqueeze(0)    # -> (1, bacth_size)
         # actions = actions.unsqueeze(-1) # (1, bacth_size, 1)
-        rewards = torch.tensor(trajectory['reward'], dtype=torch.float32)
-        dones = torch.tensor(trajectory['done'], dtype=torch.int64)
+        rewards = torch.tensor(trajectory['reward'], dtype=torch.float32, device=self.device)
+        dones = torch.tensor(trajectory['done'], dtype=torch.int64, device=self.device)
         with torch.no_grad():
             # 计算old log probs / TD target / Advantages
             action_probs = self.actor_net(states)

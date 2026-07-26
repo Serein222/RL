@@ -28,7 +28,7 @@ def preprocess_obs(obs, print_obs=False):
 '''
 def write_to_tensorboard(writer, episode, losses_data, perf_data):
     writer.add_scalar(tag='Perf/reward', scalar_value=perf_data['reward'], global_step=episode)
-    writer.add_scalar(tag='Perf/success_rate', scalar_value=perf_data['success_rate'], global_step=episode)
+    # writer.add_scalar(tag='Perf/success_rate', scalar_value=perf_data['success_rate'], global_step=episode)
     writer.add_scalar(tag='Perf/steps', scalar_value=perf_data['steps'], global_step=episode)
     writer.add_scalar(tag='Losses/actor_loss', scalar_value=losses_data['actor_loss'], global_step=episode)
     writer.add_scalar(tag='Losses/critic loss', scalar_value=losses_data['critic_loss'], global_step=episode)
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     print("Observation space:", observation_space)  # 状态空间Box（Height, Width, Channel）分别是（210, 160, 3）
     print("has Frame skip:", env.unwrapped._frameskip)
     # initialize ppo
-    episodes  = 1000
+    episodes  = 10000
     write_data = True
     visualize_first_frame = True
     actor_lr = 2.5e-4
@@ -55,9 +55,10 @@ if __name__ == "__main__":
     # state_dim取决于extractor返回的(batch, dim)的dim
     agent = PPO(256, 128, action_space, actor_lr, critic_lr, gamma, lmbda, epsilon=0.2, epoch=10, image_size=84, stuck_frame=4)
 
-    with tqdm(total=1000, desc="Training Episodes") as pbar:
-        for episode in range(1000):
+    with tqdm(total=episodes, desc="Training Episodes") as pbar:
+        for episode in range(episodes):
             state, info = env.reset()
+            last_lives = info['lives']
             done = False
             trajectory = {'state': [], 'action': [], 'reward': [], 'next_state': [], "done": []}
             action = -1
@@ -82,13 +83,18 @@ if __name__ == "__main__":
                 #     action = 1
                 # else:
                 action, prob = agent.take_action(frame_buffer)
-                    # print("output action is:", action, "its prob is:", np.exp(prob))
+                # print("output action is:", action, "its prob is:", np.exp(prob))
 
                 # ppo step test
                 next_frame, reward, terminated, truncated, info = env.step(action)
                 next_image = preprocess_obs(next_frame)
                 done = terminated or truncated
-                
+                lives = info['lives']
+                if lives < last_lives:
+                    reward -= 0.1   # 漏球惩罚
+                # 如果要计算是否接到球，则需要屏蔽球尚未下落时板子的动作
+                last_lives = lives
+                # print(f"debug: info is {info}")
                 # ppo update test
                 trajectory['state'].append(frame_buffer)
                 trajectory['action'].append(action)

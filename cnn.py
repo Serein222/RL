@@ -6,12 +6,14 @@ import cv2
 class FrameFeatureExtractor(nn.Module):
     def __init__(self, image_size: int, output_dim: int, input_channels: int):
         super(FrameFeatureExtractor, self).__init__()
-        self.cnn = SimpleCNN(image_size, output_dim, input_channels)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.cnn = SimpleCNN(image_size, output_dim, input_channels).to(self.device)
+        
     def forward(self, x):
-        if isinstance(x, list):
+        if isinstance(x, list): # list of deque, seperate
             x = np.array([np.array(i) for i in x], dtype=np.float32)
         if isinstance(x, np.ndarray):
-            x = torch.from_numpy(x)
+            x = torch.from_numpy(x).to(self.device)
         out = self.cnn(x)
         return out[0]
 
@@ -29,6 +31,7 @@ class SimpleCNN(nn.Module):
         self.fc1 = nn.Linear(self.conv3_size * self.conv3_size * 64, 512)
         self.fc2 = nn.Linear(512, output_dim)
         self.relu = nn.ReLU()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
     
     def forward(self, x):
