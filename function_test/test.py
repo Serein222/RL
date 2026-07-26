@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 import os
 import sys
+import torch
 from tqdm import tqdm
 from collections import deque
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,20 +25,43 @@ def preprocess_obs(obs, print_obs=False):
     obs = np.expand_dims(obs,axis=0)  # (C, H, W)
     return obs.astype(np.float32)
 '''
+添加模型检查
+'''
+def save_checkpoint(agent, global_step, save_dir="checkpoints", optimizer=None):
+    """保存模型检查点，包含网络权重和优化器状态（可选）"""
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    
+    checkpoint = {
+        'global_step': global_step,
+        'extractor_state_dict': agent.extractor.state_dict(),
+        'actor_state_dict': agent.actor_net.state_dict(),
+        'critic_state_dict': agent.critic_net.state_dict(),
+    }
+    if optimizer is not None:
+        checkpoint['optimizer_state_dict'] = optimizer.state_dict()
+    
+    # 文件名可包含步数
+    file_path = os.path.join(save_dir, f"checkpoint_step_{global_step}.pt")
+    torch.save(checkpoint, file_path)
+    print(f"Checkpoint saved to {file_path}")
+
+
+'''
 添加可视化
 '''
-def write_to_tensorboard(writer, episode, losses_data, perf_data):
-    writer.add_scalar(tag='Perf/reward', scalar_value=perf_data['reward'], global_step=episode)
+def write_to_tensorboard(writer, episode, global_step, losses_data, perf_data):
+    writer.add_scalar(tag='Perf/reward', scalar_value=perf_data['reward'], global_step=global_step)
     # writer.add_scalar(tag='Perf/success_rate', scalar_value=perf_data['success_rate'], global_step=episode)
-    writer.add_scalar(tag='Perf/steps', scalar_value=perf_data['steps'], global_step=episode)
-    writer.add_scalar(tag='Losses/actor_loss', scalar_value=losses_data['actor_loss'], global_step=episode)
-    writer.add_scalar(tag='Losses/critic loss', scalar_value=losses_data['critic_loss'], global_step=episode)
-    writer.add_scalar(tag='Losses/entropy', scalar_value=losses_data['entropy'], global_step=episode)
+    writer.add_scalar(tag='Perf/steps', scalar_value=perf_data['steps'], global_step=global_step)
+    writer.add_scalar(tag='Losses/actor_loss', scalar_value=losses_data['actor_loss'], global_step=global_step)
+    writer.add_scalar(tag='Losses/critic loss', scalar_value=losses_data['critic_loss'], global_step=global_step)
+    writer.add_scalar(tag='Losses/entropy', scalar_value=losses_data['entropy'], global_step=global_step)
 
 if __name__ == "__main__":
     env = gym.make("ALE/Breakout-v5", frameskip=4)   # , render_mode="human"
     writer = SummaryWriter(log_dir='log/stuck_frame')
-    summary_window = 20
+    summary_window = 2048 * 5
     action_space = env.action_space.n
     observation_space = env.observation_space.shape
     print("Action space:", action_space)    # 动作空间Discrete：（Noop, Fire, Left, Right）分别是（0, 1, 2, 3）
@@ -45,6 +69,8 @@ if __name__ == "__main__":
     print("has Frame skip:", env.unwrapped._frameskip)
     # initialize ppo
     episodes  = 10000
+    rollout = 2048
+    global_step = 0
     write_data = True
     visualize_first_frame = True
     actor_lr = 2.5e-4
@@ -54,13 +80,12 @@ if __name__ == "__main__":
     stuck_frame = 4 # n帧图像堆叠
     # state_dim取决于extractor返回的(batch, dim)的dim
     agent = PPO(256, 128, action_space, actor_lr, critic_lr, gamma, lmbda, epsilon=0.2, epoch=10, image_size=84, stuck_frame=4)
-
+    trajectory = {'state': [], 'action': [], 'reward': [], 'next_state': [], "done": []}
     with tqdm(total=episodes, desc="Training Episodes") as pbar:
         for episode in range(episodes):
             state, info = env.reset()
             last_lives = info['lives']
             done = False
-            trajectory = {'state': [], 'action': [], 'reward': [], 'next_state': [], "done": []}
             action = -1
             frame_buffer = deque(maxlen=stuck_frame)
             while not done:
@@ -103,12 +128,19 @@ if __name__ == "__main__":
                 
                 frame_buffer.append(next_image[0])
                 trajectory['next_state'].append(frame_buffer)
-            loss, perf = agent.update(trajectory)
-            pbar.set_postfix({
-                'Reward': f"{perf['reward']:.2f}",
-                # 'Success Rate': f"{perf['success_rate']:.2f}",
-                'Steps': perf['steps']
-            })
+                global_step += 1
+                if write_data == True and global_step % summary_window == 0:
+                    write_to_tensorboard(writer, episode, global_step, loss, perf)
+                    # 模型保存
+                    print(f"save model at {global_step} steps")
+                    save_checkpoint(agent, global_step, save_dir='./model', optimizer=agent.optimizer)
+                if len(trajectory['state']) >= rollout: # trajectory to rollout
+                    loss, perf = agent.update(trajectory)   # 用完之后清空收集的trajectory
+                    trajectory = {'state': [], 'action': [], 'reward': [], 'next_state': [], "done": []}
+            # pbar.set_postfix({
+            #     'Reward': f"{perf['reward']:.2f}",
+            #     # 'Success Rate': f"{perf['success_rate']:.2f}",
+            #     'Steps': perf['steps']
+            # })
             pbar.update(1)
-            if write_data == True and episode % summary_window == 0:
-                write_to_tensorboard(writer, episode, loss, perf)
+            
