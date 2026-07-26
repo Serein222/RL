@@ -4,6 +4,23 @@ from cnn import FrameFeatureExtractor
 import torch.nn.functional as F
 import torch
 from collections import deque
+def check_nan_params(model, name):
+    for param_name, param in model.named_parameters():
+        if torch.isnan(param).any():
+            print(f"[NaN PARAM] {name}.{param_name}")
+            return True
+        if torch.isinf(param).any():
+            print(f"[Inf PARAM] {name}.{param_name}")
+            return True
+        if param.grad is None:
+            continue
+        if torch.isnan(param.grad).any():
+            print(f"[NaN GRAD] {name}.{param_name}")
+            return True
+        if torch.isinf(param.grad).any():
+            print(f"[Inf GRAD] {name}.{param_name}")
+            return True
+    return False
 class PPO:
     def __init__(self, state_dim, hidden_dim, action_dim, actor_lr, critic_lr, gamma, lmbda, epsilon, epoch, image_size, stuck_frame=None, batch_size=64, entropy_coef=0.001):
         self.state_dim = state_dim
@@ -56,7 +73,7 @@ class PPO:
             # 计算old log probs / TD target / Advantages
             action_probs = self.actor_net(states)
             # print("debug: ", action_probs.ndim, action_probs.shape, actions, actions.ndim, actions.shape)
-            old_action_logits = torch.log(action_probs.gather(1, actions))    # [steps] -> [steps, 1]
+            old_action_logits = torch.log(action_probs.gather(1, actions) + 1e-8)    # [steps] -> [steps, 1] +1e-8避免0值
             values_next = self.critic_net(next_states).squeeze(-1)
             values_now = self.critic_net(states).squeeze(-1)
             TD_targets = rewards + self.gamma * values_next * (1 - dones)
@@ -76,7 +93,7 @@ class PPO:
             action_dist = torch.distributions.Categorical(probs=action_probs)   # [steps, action_dim]
             entropy = action_dist.entropy().mean()  # [steps] -> [1]
             
-            action_logits = torch.log(action_probs.gather(1, actions)) # [steps, 1]
+            action_logits = torch.log(action_probs.gather(1, actions) + 1e-8) # [steps, 1]
             ratio = torch.exp(action_logits - old_action_logits).squeeze(-1)
             surr1 = ratio * advantages
             surr2 = torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon) * advantages
@@ -94,7 +111,14 @@ class PPO:
             self.optimizer.zero_grad()
             loss = actor_loss + critic_loss * 0.5
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.extractor.parameters(), 0.5)    # clip grad
+            torch.nn.utils.clip_grad_norm_(self.actor_net.parameters(), 0.5)
+            torch.nn.utils.clip_grad_norm_(self.critic_net.parameters(), 0.5)
             self.optimizer.step()
+            check_nan_params(self.extractor, "extractor")   # 检测网络输出是否有异常值
+            check_nan_params(self.actor_net, "actor")
+            check_nan_params(self.critic_net, "critic")
+
         losses_data = {'actor_loss': actor_loss.item(), 'critic_loss': critic_loss.item(), 'entropy': entropy.item()}
         perf_data = {'reward': np.sum(trajectory['reward']), 'steps': len(trajectory['reward'])}
         return losses_data, perf_data
